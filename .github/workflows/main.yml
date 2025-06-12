@@ -26,8 +26,8 @@ jobs:
     - name: Build
       run: |
         mkdir -p build
-        go mod init myapp
-        go mod tidy
+        # go mod init myapp
+        # go mod tidy
         GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -buildvcs=false -o build/myapp-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }} -ldflags "-s -w" .
 
     - name: Upload Artifact
