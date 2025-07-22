@@ -1,34 +1,31 @@
-name: 发布构建
+name: 测试构建
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - dev
+      - develop
+      - feature/*
+  pull_request:
+    branches:
+      - main
+      - master
+      - dev
   workflow_dispatch:
     inputs:
-      tag:
-        description: '发布标签'
-        required: true
-        default: 'v1.0.0'
-      draft:
-        description: '创建草稿发布'
-        type: boolean
-        default: false
-      prerelease:
-        description: '标记为预发布'
-        type: boolean
-        default: false
+      branch:
+        description: '测试分支'
+        required: false
+        default: 'dev'
 
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
 
 jobs:
-  goreleaser:
-    name: 构建和发布
+  test-build:
+    name: 测试构建
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
 
     # 设置作业级别的环境变量
     env:
@@ -41,18 +38,18 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.inputs.branch || github.ref }}
 
       - name: 🔍 获取项目信息
         id: project
         run: |
           echo "owner=${GITHUB_REPOSITORY_OWNER}" >> $GITHUB_OUTPUT
           echo "repo=${GITHUB_REPOSITORY#*/}" >> $GITHUB_OUTPUT
-          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          echo "full_sha=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+          echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
           echo "short_sha=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
+          echo "full_sha=${GITHUB_SHA}" >> $GITHUB_OUTPUT
           echo "build_date=$(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_OUTPUT
-          echo "build_timestamp=$(date +%s)" >> $GITHUB_OUTPUT
+          echo "timestamp=$(date +%s)" >> $GITHUB_OUTPUT
 
       - name: 🐹 设置 Go 环境
         uses: actions/setup-go@v5
@@ -74,7 +71,7 @@ jobs:
         run: |
           echo "Go 版本: $(go version)"
           echo "UPX 版本: $(upx --version)"
-          echo "Git 标签: ${{ steps.project.outputs.version }}"
+          echo "分支: ${{ steps.project.outputs.branch }}"
           echo "提交: ${{ steps.project.outputs.short_sha }}"
           echo "仓库: ${{ steps.project.outputs.owner }}/${{ steps.project.outputs.repo }}"
           echo "构建时间: ${{ steps.project.outputs.build_date }}"
@@ -89,20 +86,15 @@ jobs:
           echo "start_time=$(date +%s)" >> $GITHUB_OUTPUT
           echo "start_readable=$(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_OUTPUT
 
-      - name: 🚀 构建和发布
-        id: build_step
+      - name: 🚀 测试构建 (Snapshot 模式)
         uses: goreleaser/goreleaser-action@v5
         with:
           distribution: goreleaser
           version: latest
-          args: release --clean -f .github/conf/.goreleaser.yml ${{ inputs.draft && '--draft' || '' }} ${{ inputs.prerelease && '--prerelease' || '' }}
+          args: release --snapshot --clean -f .github/conf/.goreleaser.yml
           workdir: .
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPO: ${{ github.event.repository.name }}
-          GITHUB_OWNER: ${{ github.repository_owner }}
-          PROJECT_NAME: ${{ github.event.repository.name }}
-        continue-on-error: true
 
       - name: 📊 记录构建结束时间
         id: build_end
@@ -115,15 +107,13 @@ jobs:
           echo "duration=${duration}" >> $GITHUB_OUTPUT
           echo "duration_readable=$(printf '%02d:%02d:%02d' $((duration/3600)) $((duration%3600/60)) $((duration%60)))" >> $GITHUB_OUTPUT
 
-      - name: 📋 上传构建产物
+      - name: 📋 上传测试产物
         uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: 构建产物-${{ steps.project.outputs.version }}
+          name: 测试构建-${{ steps.project.outputs.branch }}-${{ steps.project.outputs.short_sha }}
           path: |
             dist/
-          retention-days: 30
-        continue-on-error: true
+          retention-days: 7
 
       - name: 📊 统计构建产物
         id: build_stats
@@ -133,58 +123,35 @@ jobs:
             executable_files=$(find dist/ -type f -executable | wc -l)
             config_files=$(find dist/ -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name "*.txt" | wc -l)
           
-            # 平台统计
-            linux_count=$(find dist/ -name "*linux*" -type f | wc -l)
-            darwin_count=$(find dist/ -name "*darwin*" -type f | wc -l)
-            windows_count=$(find dist/ -name "*windows*" -type f | wc -l)
-          
             echo "total_files=$total_files" >> $GITHUB_OUTPUT
             echo "executable_files=$executable_files" >> $GITHUB_OUTPUT
             echo "config_files=$config_files" >> $GITHUB_OUTPUT
-            echo "linux_count=$linux_count" >> $GITHUB_OUTPUT
-            echo "darwin_count=$darwin_count" >> $GITHUB_OUTPUT
-            echo "windows_count=$windows_count" >> $GITHUB_OUTPUT
           else
             echo "total_files=0" >> $GITHUB_OUTPUT
             echo "executable_files=0" >> $GITHUB_OUTPUT
             echo "config_files=0" >> $GITHUB_OUTPUT
-            echo "linux_count=0" >> $GITHUB_OUTPUT
-            echo "darwin_count=0" >> $GITHUB_OUTPUT
-            echo "windows_count=0" >> $GITHUB_OUTPUT
           fi
 
-      - name: 📊 生成发布报告
+      - name: 📊 生成构建报告
         if: always()
         run: |
-          # 构建状态判断
-          if [[ "${{ steps.build_step.outcome }}" == "success" ]]; then
-            build_status="![构建状态](https://img.shields.io/badge/构建-成功-brightgreen)"
-            release_status="![发布状态](https://img.shields.io/badge/发布-成功-brightgreen)"
-          else
-            build_status="![构建状态](https://img.shields.io/badge/构建-失败-red)"
-            release_status="![发布状态](https://img.shields.io/badge/发布-失败-red)"
-          fi
-          
-          echo "# 🎉 发布构建报告" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "$build_status $release_status" >> $GITHUB_STEP_SUMMARY
+          echo "# 🎯 测试构建报告" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # 基本信息
-          echo "## 📋 发布基本信息" >> $GITHUB_STEP_SUMMARY
+          # 基本信息表格
+          echo "## 📋 构建基本信息" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| 项目 | 值 |" >> $GITHUB_STEP_SUMMARY
           echo "|------|-----|" >> $GITHUB_STEP_SUMMARY
           echo "| 🏷️ **项目名称** | ${{ steps.project.outputs.repo }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 👤 **拥有者** | ${{ steps.project.outputs.owner }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🏷️ **版本** | \`${{ steps.project.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🌿 **分支** | ${{ steps.project.outputs.branch }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 📝 **提交SHA** | \`${{ steps.project.outputs.short_sha }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| 📅 **构建时间** | ${{ steps.project.outputs.build_date }} |" >> $GITHUB_STEP_SUMMARY
           echo "| ⏱️ **构建耗时** | ${{ steps.build_end.outputs.duration_readable }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 🚀 **触发方式** | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 🔧 **Go版本** | $(go version | cut -d' ' -f3) |" >> $GITHUB_STEP_SUMMARY
           echo "| 🗜️ **UPX版本** | $(upx --version | head -1 | cut -d' ' -f2) |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📦 **发布类型** | $(if [[ "${{ inputs.draft }}" == "true" ]]; then echo "草稿"; elif [[ "${{ inputs.prerelease }}" == "true" ]]; then echo "预发布"; else echo "正式发布"; fi) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # 构建环境信息
@@ -209,27 +176,15 @@ jobs:
           echo "| ⏱️ **总耗时** | ${{ steps.build_end.outputs.duration_readable }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # 构建结果
-          echo "## 🚀 构建结果" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| 构建阶段 | 状态 |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|------|" >> $GITHUB_STEP_SUMMARY
-          
-          if [[ "${{ steps.build_step.outcome }}" == "success" ]]; then
-            echo "| 🏗️ **构建发布** | ✅ 成功 |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| 🏗️ **构建发布** | ❌ 失败 |" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # 发布产物统计
+          # 构建产物统计
           if [ -d "dist" ]; then
-            echo "## 📦 发布产物统计" >> $GITHUB_STEP_SUMMARY
+            echo "## 📦 构建产物统计" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
           
             # 文件类型统计
             echo "### 📊 文件类型统计" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
+          
             echo "| 文件类型 | 数量 |" >> $GITHUB_STEP_SUMMARY
             echo "|----------|------|" >> $GITHUB_STEP_SUMMARY
             echo "| 📁 **总文件数** | ${{ steps.build_stats.outputs.total_files }} |" >> $GITHUB_STEP_SUMMARY
@@ -237,35 +192,23 @@ jobs:
             echo "| 📄 **配置文件** | ${{ steps.build_stats.outputs.config_files }} |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
           
-            # 平台分布统计
-            echo "### 🌍 平台分布统计" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "| 平台 | 数量 |" >> $GITHUB_STEP_SUMMARY
-            echo "|------|------|" >> $GITHUB_STEP_SUMMARY
-            echo "| 🐧 **Linux** | ${{ steps.build_stats.outputs.linux_count }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🍎 **macOS** | ${{ steps.build_stats.outputs.darwin_count }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🪟 **Windows** | ${{ steps.build_stats.outputs.windows_count }} |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          
             # 总产物大小
             echo "### 📦 产物大小" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
+          
             total_size=$(du -sh dist/ 2>/dev/null | cut -f1 || echo "未知")
             echo "**总产物大小**: $total_size" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
           fi
           
-          # 发布总结
-          echo "## 📈 发布总结" >> $GITHUB_STEP_SUMMARY
+          # 总结
+          echo "## 📈 构建总结" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [[ "${{ steps.build_step.outcome }}" == "success" ]]; then
+          if [ "${{ job.status }}" == "success" ]; then
             echo "🎉 **构建状态**: ✅ 成功" >> $GITHUB_STEP_SUMMARY
-            echo "🎉 **发布状态**: ✅ 成功" >> $GITHUB_STEP_SUMMARY
-            echo "🔗 **发布链接**: https://github.com/${{ steps.project.outputs.owner }}/${{ steps.project.outputs.repo }}/releases/tag/${{ steps.project.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           else
             echo "🎉 **构建状态**: ❌ 失败" >> $GITHUB_STEP_SUMMARY
-            echo "🎉 **发布状态**: ❌ 失败" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "📊 **可执行文件**: ${{ steps.build_stats.outputs.executable_files }} 个" >> $GITHUB_STEP_SUMMARY
@@ -273,25 +216,14 @@ jobs:
           echo "📦 **产物大小**: $(du -sh dist/ 2>/dev/null | cut -f1 || echo "未知")" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # 快速链接
+          # 添加快速链接
           echo "## 🔗 快速链接" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- 🎯 [查看发布页面](https://github.com/${{ steps.project.outputs.owner }}/${{ steps.project.outputs.repo }}/releases/tag/${{ steps.project.outputs.version }})" >> $GITHUB_STEP_SUMMARY
           echo "- 📋 [查看产物列表](https://github.com/${{ steps.project.outputs.owner }}/${{ steps.project.outputs.repo }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
           echo "- 📥 [下载产物](https://github.com/${{ steps.project.outputs.owner }}/${{ steps.project.outputs.repo }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
           echo "- 🔍 [查看提交](https://github.com/${{ steps.project.outputs.owner }}/${{ steps.project.outputs.repo }}/commit/${{ steps.project.outputs.full_sha }})" >> $GITHUB_STEP_SUMMARY
+          echo "- 🌿 [查看分支](https://github.com/${{ steps.project.outputs.owner }}/${{ steps.project.outputs.repo }}/tree/${{ steps.project.outputs.branch }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           echo "---" >> $GITHUB_STEP_SUMMARY
           echo "*报告生成时间: $(date -u +"%Y-%m-%d %H:%M:%S UTC")*" >> $GITHUB_STEP_SUMMARY
-
-      - name: 📬 发送通知
-        if: always()
-        run: |
-          if [[ "${{ steps.build_step.outcome }}" == "success" ]]; then
-            echo "✅ 发布成功！版本 ${{ steps.project.outputs.version }} 已发布"
-            # 这里可以添加发送成功通知的逻辑（如 Slack、邮件等）
-          else
-            echo "❌ 发布失败！请检查构建日志"
-            # 这里可以添加发送失败通知的逻辑
-          fi

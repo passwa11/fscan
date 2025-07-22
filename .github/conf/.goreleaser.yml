@@ -1,64 +1,125 @@
+# 项目名称 - 直接使用环境变量
+project_name: "{{ .Env.PROJECT_NAME }}"
+
+# 构建前钩子
 before:
   hooks:
     - go mod tidy
+    - go mod download
+
+# 构建配置
 builds:
-  -
-    id: default
+  - id: default
+    binary: "{{ .ProjectName }}"
     env:
       - CGO_ENABLED=0
     goos:
       - windows
       - linux
       - darwin
-      - freebsd
-      - solaris
     goarch:
       - amd64
-      - "386"
-      - arm
       - arm64
-#      - mips
-#      - mipsle
-#      - mips64
+      - "386"
     goarm:
-      - "6"
       - "7"
+    ignore:
+      - goos: darwin
+        goarch: "386"
+      - goos: windows
+        goarch: arm64
     flags:
       - -trimpath
     ldflags:
       - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+      - -X main.builtBy=goreleaser
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# UPX 压缩
 upx:
-  -
-    ids: [ default ]
+  - ids: [default]
     enabled: true
     goos: ["windows", "linux"]
     goarch: ["amd64", "386"]
     compress: best
-#    lzma: true
-#    brute: true
+    brute: false
+    lzma: false
+
+# 归档配置
 archives:
-  -
+  - id: default
     format: binary
     allow_different_binary_count: true
     name_template: >-
-      {{- .ProjectName }}
-      {{- if eq .Os "darwin"}}_mac
-      {{- else if eq .Os "linux"}}
-      {{- else if eq .Os "windows"}}
-      {{- else }}_{{ .Os }}{{ end }}
-      {{- if eq .Arch "amd64" }}
-      {{- else if eq .Arch "386" }}32
-      {{- else }}_{{ .Arch }}{{ end }}
-      {{- if .Arm }}v{{ .Arm }}{{ end -}}
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- if eq .Os "darwin" }}mac
+      {{- else }}{{ .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x64
+      {{- else if eq .Arch "386" }}x32
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+      {{- if eq .Os "windows" }}.exe{{ end }}
+
+# 校验和
 checksum:
   name_template: 'checksums.txt'
-snapshot:
-  name_template: "{{ incpatch .Version }}-next"
+  algorithm: sha256
+
+# 变更日志
 changelog:
   sort: asc
+  use: github
   filters:
     exclude:
-      - '^docs:'
-      - '^test:'
-      - "^*.md"
-      - "^*.ya?ml"
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+  groups:
+    - title: "🚀 新功能"
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: "🐛 问题修复"
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: "📚 文档更新"
+      regexp: "^.*docs[(\\w)]*:+.*$"
+      order: 2
+    - title: "🔧 其他改进"
+      order: 999
+
+# 发布配置
+release:
+  github:
+    owner: "{{ .Env.GITHUB_OWNER }}"
+    name: "{{ .Env.GITHUB_REPO }}"
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: |
+    ## 🎉 {{ .ProjectName }} {{ .Tag }} 发布说明
+    
+    感谢使用 {{ .ProjectName }}！本次发布包含以下改进：
+  footer: |
+    ## 📥 安装说明
+    
+    下载对应平台的二进制文件即可使用。
+    
+    **完整更新日志**: https://github.com/{{ .Env.GITHUB_OWNER }}/{{ .Env.GITHUB_REPO }}/compare/{{ .PreviousTag }}...{{ .Tag }}
+    
+    ---
+    
+    如有问题请提交 [Issue](https://github.com/{{ .Env.GITHUB_OWNER }}/{{ .Env.GITHUB_REPO }}/issues) 💬
+
+# 快照版本
+snapshot:
+  name_template: "{{ incpatch .Version }}-dev-{{ .ShortCommit }}"
+
+# 元数据
+metadata:
+  mod_timestamp: "{{ .CommitTimestamp }}"
